@@ -11,25 +11,53 @@
 #include <cstring>
 #include <ctime>
 #include <map>
+#if _MSC_VER <= 1500
+#pragma warning(disable:4244)
+#pragma warning(disable:4312)
+#endif
+#ifdef NANODBC_USE_BOOST
+    #include <boost/cstdint.hpp>
+#else
 #ifdef NANODBC_USE_CPP11
     #include <cstdint>
 #else
     #include <stdint.h>
 #endif
+#endif
 
 #include <sql.h>
 #include <sqlext.h>
 
+#ifndef _MSC_VER
+// These pragma's are not supported by MSVC
 // Workaround DEPRECATED_IN_MAC_OS_X_VERSION_10_X_AND_LATER
 #ifdef __clang__
     #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #else
     #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // Unicode Support
 ///////////////////////////////////////////////////////////////////////////////
+#if _MSC_VER <= 1400
+#ifdef NANODBC_USE_UNICODE
+    #define NANODBC_TEXT(s) L ## s
+    #define NANODBC_SSCANF std::swscanf
+    #define NANODBC_SNPRINTF swprintf
+    #define NANODBC_STRFTIME std::wcsftime
+    #define NANODBC_UNICODE(f) f ## W
+    #define NANODBC_SQLCHAR SQLWCHAR
+#else
+    #define NANODBC_TEXT(s) s
+    #define NANODBC_SSCANF std::sscanf
+    #define NANODBC_SNPRINTF _snprintf
+    #define NANODBC_STRFTIME std::strftime
+    #define NANODBC_UNICODE(f) f
+    #define NANODBC_SQLCHAR SQLCHAR
+#endif // NANODBC_USE_UNICODE
+#else
 #ifdef NANODBC_USE_UNICODE
     #define NANODBC_TEXT(s) L ## s
     #define NANODBC_SSCANF std::swscanf
@@ -45,6 +73,7 @@
     #define NANODBC_UNICODE(f) f
     #define NANODBC_SQLCHAR SQLCHAR
 #endif // NANODBC_USE_UNICODE
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // ODBC API Interface
@@ -843,7 +872,7 @@ public:
             NANODBC_THROW_DATABASE_ERROR(stmt_, SQL_HANDLE_STMT);
 
         NANODBC_CALL_RC(SQLExecute, rc, stmt_);
-        if (!success(rc))
+        if (!success(rc) && rc != SQL_NO_DATA)
             NANODBC_THROW_DATABASE_ERROR(stmt_, SQL_HANDLE_STMT);
         return result(statement, batch_operations);
     }
@@ -893,7 +922,7 @@ public:
     }
 
     template<class T>
-    void bind_parameter(long param, const T* value, long* nulls)
+    void bind_parameter(long param, const T* value, long* nulls, param_direction direction)
     {
         RETCODE rc;
         SQLSMALLINT data_type;
@@ -910,12 +939,31 @@ public:
         if(!success(rc))
             NANODBC_THROW_DATABASE_ERROR(stmt_, SQL_HANDLE_STMT);
 
+        SQLSMALLINT        fParamType;
+        switch (direction) {
+            default:
+                assert(false);
+                //fallthrough
+            case In:
+                fParamType = SQL_PARAM_INPUT;
+                break;
+            case Out:
+                fParamType = SQL_PARAM_OUTPUT;
+                break;
+            case InOut:
+                fParamType = SQL_PARAM_INPUT_OUTPUT;
+                break;
+            case Return:
+                fParamType = SQL_PARAM_OUTPUT;
+                break;
+        }
+
         NANODBC_CALL_RC(
             SQLBindParameter
             , rc
             , stmt_
             , param + 1
-            , SQL_PARAM_INPUT
+            , fParamType
             , sql_type_info<T>::ctype
             , data_type
             , parameter_size // column size ignored for many types, but needed for strings
@@ -1109,6 +1157,20 @@ public:
             throw index_range_error();
         bound_column& col = bound_columns_[column];
         return col.sqltype_;
+    }
+
+    bool next_result() const
+    {
+        RETCODE rc;
+        NANODBC_CALL_RC(
+            SQLMoreResults
+            , rc
+            , stmt_.native_statement_handle());
+        if (rc == SQL_NO_DATA)
+            return false;
+        if (!success(rc))
+            NANODBC_THROW_DATABASE_ERROR(stmt_.native_statement_handle(), SQL_HANDLE_STMT);
+        return true;
     }
 
     template<class T>
@@ -1837,22 +1899,22 @@ unsigned long statement::parameter_size(long param) const
 }
 
 template<class T>
-void statement::bind_parameter(long param, const T* value, long* nulls)
+void statement::bind_parameter(long param, const T* value, long* nulls, param_direction direction)
 {
-    impl_->bind_parameter(param, reinterpret_cast<const T*>(value), nulls);
+    impl_->bind_parameter(param, reinterpret_cast<const T*>(value), nulls, direction);
 }
 
 // The following are the only supported instantiations of statement::bind_parameter().
-template void statement::bind_parameter(long, const char*, long*);
-template void statement::bind_parameter(long, const short*, long*);
-template void statement::bind_parameter(long, const unsigned short*, long*);
-template void statement::bind_parameter(long, const int32_t*, long*);
-template void statement::bind_parameter(long, const uint32_t*, long*);
-template void statement::bind_parameter(long, const int64_t*, long*);
-template void statement::bind_parameter(long, const uint64_t*, long*);
-template void statement::bind_parameter(long, const float*, long*);
-template void statement::bind_parameter(long, const double*, long*);
-template void statement::bind_parameter(long, const date*, long*);
+template void statement::bind_parameter(long, const char*, long*, param_direction);
+template void statement::bind_parameter(long, const short*, long*, param_direction);
+template void statement::bind_parameter(long, const unsigned short*, long*, param_direction);
+template void statement::bind_parameter(long, const int32_t*, long*, param_direction);
+template void statement::bind_parameter(long, const uint32_t*, long*, param_direction);
+template void statement::bind_parameter(long, const int64_t*, long*, param_direction);
+template void statement::bind_parameter(long, const uint64_t*, long*, param_direction);
+template void statement::bind_parameter(long, const float*, long*, param_direction);
+template void statement::bind_parameter(long, const double*, long*, param_direction);
+template void statement::bind_parameter(long, const date*, long*, param_direction);
 
 } // namespace nanodbc
 
@@ -1976,6 +2038,11 @@ string_type result::column_name(short column) const
 int result::column_datatype(short column) const
 {
     return impl_->column_datatype(column);
+}
+
+bool result::next_result() const
+{
+    return impl_->next_result();
 }
 
 template<class T>

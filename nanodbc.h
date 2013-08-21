@@ -66,6 +66,16 @@
 #include <stdexcept>
 #include <string>
 
+#ifdef NANODBC_USE_BOOST
+// Visual C++ 2005
+    #define NANODBC_TR1_STD std::
+    #include <boost/smart_ptr.hpp>
+    #include <boost/cstdint.hpp>
+    namespace std
+    {
+        using namespace boost;
+    }
+#else
 // You must explicitly request C++11 support by defining NANODBC_USE_CPP11 at compile time, otherwise nanodbc will assume it must use tr1 instead.
 #ifndef NANODBC_USE_CPP11
     #include <tr1/cstdint>
@@ -75,6 +85,7 @@
     #include <cstdint>
     #include <memory>
     #define NANODBC_TR1_STD std::
+#endif
 #endif
 
 //! \brief The entirety of nanodbc can be found within this one namespace.
@@ -342,6 +353,8 @@ public:
     //! \brief Returns the parameter size for the indicated parameter placeholder within a prepared statement.
     unsigned long parameter_size(long param) const;
 
+    enum param_direction { In, Out, InOut, Return };
+
     //! \brief Binds the given value to the given parameter placeholder number in the prepared statement.
     //!
     //! If your prepared SQL query has any ? placeholders, this is how you bind values to them.
@@ -352,7 +365,7 @@ public:
     //! \param nulls Used to batch insert nulls into the database.
     //! \throws database_error
     template<class T>
-    void bind_parameter(long param, const T* value, long* nulls = 0);
+    void bind_parameter(long param, const T* value, long* nulls = 0, param_direction direction = In);
 
     //! \brief Binds the given values to the given parameter placeholder number in the prepared statement.
     //!
@@ -572,6 +585,9 @@ public:
 
     //! Returns a identifying integer value representing the C type of this column.
     int column_datatype(short column) const;
+
+    //! Returns the next result
+    bool next_result() const;
 
 private:
     result(statement statement, long rowset_size);

@@ -58,6 +58,8 @@
 //! \brief Example library usage.
 //! \include example.cpp
 
+#define NANODBC_USE_BOOST
+
 #ifndef NANODBC_H
 #define NANODBC_H
 

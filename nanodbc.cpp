@@ -1,5 +1,7 @@
 //! \file nanodbc.cpp Implementation details.
 
+#include "stdafx.h"
+
 #include "nanodbc.h"
 
 #include <algorithm>
